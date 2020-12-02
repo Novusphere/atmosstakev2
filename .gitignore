@@ -1,0 +1,4 @@
+# Build build results
+[Bb]uild/
+deploy.json
+.vscode
