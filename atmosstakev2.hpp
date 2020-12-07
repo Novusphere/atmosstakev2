@@ -48,6 +48,7 @@ public:
         uint64_t key;
         eosio::public_key public_key;
         eosio::asset total_balance;
+        uint64_t total_weight;
 
         TABLE_PRIMARY_KEY(key);
         TABLE_SECONDARY_PUBLIC_KEY(public_key);
@@ -61,6 +62,7 @@ public:
     // ACTIONS
     //
 
+    ACTION sanity();
     ACTION destroy();
     ACTION create(
         eosio::name token_contract,
@@ -71,6 +73,7 @@ public:
         int64_t max_stake_secs,
         eosio::asset min_stake);
     ACTION exitstake(uint64_t key, eosio::symbol token_symbol, eosio::name to, string memo, eosio::signature sig);
+    ACTION fexitstakes(eosio::symbol token_symbol, eosio::name to);
     ACTION claim(eosio::symbol token_symbol, eosio::name relay, string memo);
 
     //

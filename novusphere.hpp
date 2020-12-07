@@ -22,6 +22,7 @@
 #define by_public_key (eosio::name("bypk"))
 
 extern bool b58tobin(void *bin, size_t *binszp, const char *b58);
+extern bool b58enc(char *b58, size_t *b58sz, const void *data, size_t binsz);
 
 namespace eosio
 {
@@ -66,14 +67,30 @@ namespace eosio
 
     inline const eosio::public_key public_key_from_string(const std::string str)
     {
-        check(str.size() == 53, "str must be a 53-char EOS public key");
-        check(str.substr(0, 3) == "EOS", "public key must start with EOS");
+        eosio::check(str.size() == 53, "str must be a 53-char EOS public key");
+        eosio::check(str.substr(0, 3) == "EOS", "public key must start with EOS");
 
         eosio::public_key pk;
         size_t pk_len = 37;
-        b58tobin((void *)pk.data.data(), &pk_len, str.substr(3).c_str());
+        eosio::check(b58tobin((void *)pk.data.data(), &pk_len, str.substr(3).c_str()), "failed b58 decode");
 
         return pk;
+    }
+
+    inline const string public_key_to_string(const eosio::public_key pk)
+    {
+        eosio::checksum160 checksum = eosio::ripemd160((const char *)pk.data.data(), 33);
+        std::array<uint8_t, 20> checksum_bytes = checksum.extract_as_byte_array();
+
+        uint8_t key[37];
+        memcpy(&key[0], (void *)pk.data.data(), 33);
+        for (int i = 0; i < 4; i++)
+            key[33 + i] = checksum_bytes[i];
+
+        char b58[54] = {'E', 'O', 'S'};
+        size_t b58_len = 51; 
+        eosio::check(b58enc(&b58[3], &b58_len, key, 37), "failed b58 encode");
+        return string(b58);
     }
 
     template <name::raw A, typename B, typename... C>

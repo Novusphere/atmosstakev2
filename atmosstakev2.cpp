@@ -5,6 +5,54 @@
 #include "atmosstakev2.hpp"
 
 //
+// Checks sanity of all data associated with the contract
+//
+ACTION atmosstakev2::sanity()
+{
+	// check public key sanity
+	eosio::public_key pk = eosio::public_key_from_string("EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX");
+	string pks = eosio::public_key_to_string(pk);
+	eosio::check(pks == "EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX", "Unexpected pk: "s + pks + " != EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX"s);
+
+	// stats: total_weight, total_supply
+	stats stats_table(_self, _self.value);
+
+	for (auto it = stats_table.begin(); it != stats_table.end(); it++)
+	{
+		stakes stakes_table(_self, it->token_symbol.raw());
+		accounts accounts_table(_self, it->token_symbol.raw());
+
+		int64_t total_weight = 0;
+		eosio::asset total_supply = eosio::asset(0, it->token_symbol);
+
+		for (auto stake = stakes_table.begin(); stake != stakes_table.end(); stake++) 
+		{
+			total_weight += stake->weight;
+			total_supply += stake->balance;
+		}
+
+		eosio::check(total_weight == it->total_weight, "stat->total_weight="s + to_string(it->total_weight) + ", [stakes_table]->total_weight="s + to_string(total_weight));
+		eosio::check(total_supply == it->total_supply, "stat->total_supply="s + it->total_supply.to_string() + ", [stakes_table]->total_supply="s + total_supply.to_string());
+	
+		total_weight = 0;
+		total_supply = eosio::asset(0, it->token_symbol);
+
+		
+		for (auto acc = accounts_table.begin(); acc != accounts_table.end(); acc++) 
+		{
+			total_weight += acc->total_weight;
+			total_supply += acc->total_balance;
+		}
+		
+		eosio::check(total_weight == it->total_weight, "stat->total_weight="s + to_string(it->total_weight) + ", [accounts_table]->total_weight="s + to_string(total_weight));
+		eosio::check(total_supply == it->total_supply, "stat->total_supply="s + it->total_supply.to_string() + ", [accounts_table]->total_supply="s + total_supply.to_string());
+
+	}
+
+	eosio::check(false, "Sanity is OK");
+}
+
+//
 // Destroys all data associated with the contract
 // WARNING: should only be called upon termination or migration
 //
@@ -86,6 +134,36 @@ ACTION atmosstakev2::create(
 }
 
 //
+// Can only be called by contract itself, used as an emergency exit of all stakes
+//
+ACTION atmosstakev2::fexitstakes(eosio::symbol token_symbol, eosio::name to)
+{
+	eosio::require_auth(_self);
+	stats stats_table(_self, _self.value);
+	auto stat = stats_table.find(token_symbol.raw());
+
+	stakes stakes_table(_self, token_symbol.raw());
+	accounts accounts_table(_self, token_symbol.raw());
+
+	for (auto it = stakes_table.begin(); it != stakes_table.end(); it++)
+	{
+		eosio::action(
+			permission_level{_self, name("active")},
+			stat->token_contract, name("transfer"),
+			std::make_tuple(_self, to, it->balance, eosio::public_key_to_string(it->public_key)))
+			.send();
+	}
+
+	eosio::clear_table(stakes_table);
+	eosio::clear_table(accounts_table);
+
+	stats_table.modify(stat, same_payer, [&](auto &a) {
+		a.total_supply = eosio::asset(0, token_symbol);
+		a.total_weight = 0;
+	});
+}
+
+//
 // Called by a user to exit a stake from the system
 // The message below should be signed for the [sig] parameter:
 // `atmosstakev2 unstake:${key} ${to} ${memo}`
@@ -132,6 +210,7 @@ ACTION atmosstakev2::exitstake(uint64_t key, eosio::symbol token_symbol, eosio::
 	{
 		accounts_index.modify(account, same_payer, [&](auto &a) {
 			a.total_balance -= stake->balance;
+			a.total_weight -= stake->weight;
 		});
 	}
 
@@ -160,17 +239,23 @@ ACTION atmosstakev2::claim(eosio::symbol token_symbol, eosio::name relay, string
 	auto now = eosio::current_time_point_sec();
 	auto stat = stats_table.find(token_symbol.raw());
 	eosio::check(stat != stats_table.end(), "token not found");
-	eosio::check(eosio::time_diff_secs(now, stat->last_claim) >= stat->min_claim_secs, "it has not been a sufficient amount of time since the last claim() call"); // TO_DO: chhange to DAY_IN_SECS
+
+	auto time_delta = eosio::time_diff_secs(now, stat->last_claim);
+	if (time_delta < stat->min_claim_secs)
+		eosio::check(false, "it has not been a sufficient amount of time since the last claim() call, remaining secs: " + to_string(stat->min_claim_secs - time_delta));
+
 	eosio::check(stat->subsidy_supply >= stat->round_subsidy, "insufficient subsidy");
 
-	uint64_t subsidy = stat->round_subsidy.amount * 99 / 100;
+	eosio::asset subsidy(stat->round_subsidy.amount * 99 / 100, token_symbol);
+	eosio::check(subsidy.is_valid() && stat->round_subsidy > subsidy, "invalid subsidy");
+
 	eosio::asset relay_subsidy(stat->round_subsidy.amount * 1 / 100, token_symbol);
 	eosio::check(relay_subsidy.is_valid(), "invalid relay subsidy");
 	eosio::check(relay_subsidy.amount > 0, "relay subsidy must be greater than zero, increase relay subsidy by recalling create");
 
 	for (auto stake = stakes_table.begin(); stake != stakes_table.end(); stake++)
 	{
-		eosio::asset reward(subsidy * (stake->weight) / (stat->total_weight), token_symbol);
+		eosio::asset reward(subsidy.amount * (stake->weight) / (stat->total_weight), token_symbol);
 
 		if (reward.amount <= 0 || !reward.is_valid())
 			continue; // ignore, insufficient amount
@@ -189,13 +274,13 @@ ACTION atmosstakev2::claim(eosio::symbol token_symbol, eosio::name relay, string
 
 	stats_table.modify(stat, same_payer, [&](auto &a) {
 		a.subsidy_supply -= stat->round_subsidy;
-		a.total_supply += eosio::asset(subsidy, stat->token_symbol);
+		a.total_supply += subsidy;
 		a.last_claim = now;
 	});
 
 	eosio::action(
-		permission_level{_self, name("active")},
-		stat->token_contract, name("transfer"),
+		permission_level{_self, "active"_n},
+		stat->token_contract, "transfer"_n,
 		std::make_tuple(_self, relay, relay_subsidy, memo))
 		.send();
 }
@@ -241,12 +326,14 @@ void atmosstakev2::stake(eosio::public_key public_key, eosio::asset balance, eos
 			a.key = accounts_table.available_primary_key();
 			a.public_key = public_key;
 			a.total_balance = balance;
+			a.total_weight = weight;
 		});
 	}
 	else
 	{
 		accounts_index.modify(account, same_payer, [&](auto &a) {
 			a.total_balance += balance;
+			a.total_weight += weight;
 		});
 	}
 }
@@ -323,7 +410,7 @@ extern "C"
 			//
 			switch (action)
 			{
-				EOSIO_DISPATCH_HELPER(atmosstakev2, (destroy)(create)(exitstake)(claim))
+				EOSIO_DISPATCH_HELPER(atmosstakev2, (destroy)(create)(exitstake)(claim)(fexitstakes)(sanity))
 			}
 		}
 		else
