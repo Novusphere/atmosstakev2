@@ -73,8 +73,9 @@ public:
         int64_t max_stake_secs,
         eosio::asset min_stake);
     ACTION exitstake(uint64_t key, eosio::symbol token_symbol, eosio::name to, string memo, eosio::signature sig);
-    ACTION fexitstakes(eosio::symbol token_symbol, eosio::name to);
+    ACTION fexitstakes(eosio::symbol token_symbol, eosio::name stakes_to, eosio::name supply_to);
     ACTION claim(eosio::symbol token_symbol, eosio::name relay, string memo);
+    ACTION resetclaim(eosio::symbol token_symbol);
 
     //
     // INTERNAL CALLED ACTIONS

@@ -4,8 +4,9 @@
 #include <eosio/crypto.hpp>
 #include <eosio/system.hpp>
 
-#include <cstring>
+#include <string>
 #include <vector>
+#include <memory>
 
 #define TABLE_PRIMARY_KEY(value) \
     uint64_t primary_key() const { return value; }
@@ -33,8 +34,38 @@ namespace eosio
     {
     };
 
+    template <typename... Args>
+    inline std::string format_string(const char *format, Args... args)
+    {
+        //
+        // https://stackoverflow.com/questions/2342162/stdstring-formatting-like-sprintf
+        //
+
+        size_t size = snprintf(nullptr, 0, format, args...) + 1; // Extra space for '\0'
+        eosio::check(size > 0, "Error during formatting.");
+
+        std::unique_ptr<char[]> buf(new char[size]);
+        snprintf(buf.get(), size, format, args...);
+        return std::string(buf.get(), buf.get() + size - 1); // We don't want the '\0' inside
+    }
+
+    template <typename... Args>
+    inline void checkf(bool pred, const char *format, Args... args)
+    {
+        if (!pred)
+        {
+            // call lazily if [pred] is false
+            std::string msg = eosio::format_string(format, args...);
+            eosio::check(pred, msg);
+        }
+    }
+
     inline vector<string> split_string(string s, string delimiter)
     {
+        //
+        // https://stackoverflow.com/questions/14265581/parse-split-a-string-in-c-using-string-delimiter-standard-c
+        //
+
         size_t pos_start = 0, pos_end, delim_len = delimiter.length();
         string token;
         vector<string> res;
@@ -88,7 +119,7 @@ namespace eosio
             key[33 + i] = checksum_bytes[i];
 
         char b58[54] = {'E', 'O', 'S'};
-        size_t b58_len = 51; 
+        size_t b58_len = 51;
         eosio::check(b58enc(&b58[3], &b58_len, key, 37), "failed b58 encode");
         return string(b58);
     }

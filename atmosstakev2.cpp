@@ -12,7 +12,7 @@ ACTION atmosstakev2::sanity()
 	// check public key sanity
 	eosio::public_key pk = eosio::public_key_from_string("EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX");
 	string pks = eosio::public_key_to_string(pk);
-	eosio::check(pks == "EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX", "Unexpected pk: "s + pks + " != EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX"s);
+	eosio::checkf(pks == "EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX", "Unexpected key: %s != EOS82g6zVgPDNb1XDQBc6knEBusvPonq7KBhgCq3qkYWYt4kjm4JX", pks.c_str());
 
 	// stats: total_weight, total_supply
 	stats stats_table(_self, _self.value);
@@ -25,28 +25,26 @@ ACTION atmosstakev2::sanity()
 		int64_t total_weight = 0;
 		eosio::asset total_supply = eosio::asset(0, it->token_symbol);
 
-		for (auto stake = stakes_table.begin(); stake != stakes_table.end(); stake++) 
+		for (auto stake = stakes_table.begin(); stake != stakes_table.end(); stake++)
 		{
 			total_weight += stake->weight;
 			total_supply += stake->balance;
 		}
 
-		eosio::check(total_weight == it->total_weight, "stat->total_weight="s + to_string(it->total_weight) + ", [stakes_table]->total_weight="s + to_string(total_weight));
-		eosio::check(total_supply == it->total_supply, "stat->total_supply="s + it->total_supply.to_string() + ", [stakes_table]->total_supply="s + total_supply.to_string());
-	
+		eosio::checkf(total_weight == it->total_weight, "stat->total_weight=%s, [stakes_table]->total_weight=%s", to_string(it->total_weight).c_str(), to_string(total_weight).c_str());
+		eosio::checkf(total_supply == it->total_supply, "stat->total_supply=%s, [stakes_table]->total_supply=%s", it->total_supply.to_string().c_str(), total_supply.to_string().c_str());
+
 		total_weight = 0;
 		total_supply = eosio::asset(0, it->token_symbol);
 
-		
-		for (auto acc = accounts_table.begin(); acc != accounts_table.end(); acc++) 
+		for (auto acc = accounts_table.begin(); acc != accounts_table.end(); acc++)
 		{
 			total_weight += acc->total_weight;
 			total_supply += acc->total_balance;
 		}
-		
-		eosio::check(total_weight == it->total_weight, "stat->total_weight="s + to_string(it->total_weight) + ", [accounts_table]->total_weight="s + to_string(total_weight));
-		eosio::check(total_supply == it->total_supply, "stat->total_supply="s + it->total_supply.to_string() + ", [accounts_table]->total_supply="s + total_supply.to_string());
 
+		eosio::checkf(total_weight == it->total_weight, "stat->total_weight=%s, [stakes_table]->total_weight=%s", to_string(it->total_weight).c_str(), to_string(total_weight).c_str());
+		eosio::checkf(total_supply == it->total_supply, "stat->total_supply=%s, [stakes_table]->total_supply=%s", it->total_supply.to_string().c_str(), total_supply.to_string().c_str());
 	}
 
 	eosio::check(false, "Sanity is OK");
@@ -88,7 +86,7 @@ ACTION atmosstakev2::create(
 {
 	eosio::require_auth(_self);
 
-	eosio::check(token_symbol.is_valid(), "invalid symbol name");
+	eosio::check(token_symbol.is_valid(), "invalid token symbol name");
 	eosio::check(round_subsidy.is_valid() && round_subsidy.amount > 0 && round_subsidy.symbol == token_symbol, "invalid round subsidy");
 	eosio::check(min_stake.is_valid() && min_stake.amount > 0 && min_stake.symbol == token_symbol, "invalid min stake");
 	eosio::check(min_claim_secs > 0, "min claim secs must be greater than zero");
@@ -136,7 +134,7 @@ ACTION atmosstakev2::create(
 //
 // Can only be called by contract itself, used as an emergency exit of all stakes
 //
-ACTION atmosstakev2::fexitstakes(eosio::symbol token_symbol, eosio::name to)
+ACTION atmosstakev2::fexitstakes(eosio::symbol token_symbol, eosio::name stakes_to, eosio::name supply_to)
 {
 	eosio::require_auth(_self);
 	stats stats_table(_self, _self.value);
@@ -145,20 +143,32 @@ ACTION atmosstakev2::fexitstakes(eosio::symbol token_symbol, eosio::name to)
 	stakes stakes_table(_self, token_symbol.raw());
 	accounts accounts_table(_self, token_symbol.raw());
 
+	// eject the stakes
 	for (auto it = stakes_table.begin(); it != stakes_table.end(); it++)
 	{
 		eosio::action(
 			permission_level{_self, name("active")},
 			stat->token_contract, name("transfer"),
-			std::make_tuple(_self, to, it->balance, eosio::public_key_to_string(it->public_key)))
+			std::make_tuple(_self, stakes_to, it->balance, eosio::public_key_to_string(it->public_key)))
 			.send();
 	}
 
 	eosio::clear_table(stakes_table);
 	eosio::clear_table(accounts_table);
 
+	// eject the subsidy supply
+	if (supply_to != _self && stat->subsidy_supply.amount > 0)
+	{
+		eosio::action(
+			permission_level{_self, name("active")},
+			stat->token_contract, name("transfer"),
+			std::make_tuple(_self, supply_to, stat->subsidy_supply, "fexitstakes"s))
+			.send();
+	}
+
 	stats_table.modify(stat, same_payer, [&](auto &a) {
 		a.total_supply = eosio::asset(0, token_symbol);
+		a.subsidy_supply = eosio::asset(0, token_symbol);
 		a.total_weight = 0;
 	});
 }
@@ -184,7 +194,7 @@ ACTION atmosstakev2::exitstake(uint64_t key, eosio::symbol token_symbol, eosio::
 	eosio::check(stake != stakes_table.end(), "stake not found");
 	eosio::check(now >= stake->expires, "stake is not yet expired");
 
-	string msg = "atmosstakev2 unstake:" + to_string(key) + " " + to.to_string() + " " + memo;
+	string msg = eosio::format_string("atmosstakev2 unstake:%s %s %s", to_string(key).c_str(), to.to_string().c_str(), memo.c_str());
 	eosio::checksum256 digest = eosio::sha256(msg.c_str(), msg.length());
 	eosio::assert_recover_key(digest, sig, stake->public_key);
 
@@ -222,13 +232,28 @@ ACTION atmosstakev2::exitstake(uint64_t key, eosio::symbol token_symbol, eosio::
 }
 
 //
+// Admin function for resetting the claim period
+//
+ACTION atmosstakev2::resetclaim(eosio::symbol token_symbol)
+{	
+	eosio::require_auth(_self);	
+	
+	stats stats_table(_self, _self.value);
+	auto stat = stats_table.find(token_symbol.raw());
+
+	stats_table.modify(stat, same_payer, [&](auto &a) {
+		a.last_claim -= stat->min_claim_secs;
+	});
+}
+
+//
 // Can be called by anyone
 // Cycles through all staked amounts for [token_symbol] and awards stake accordingly
 // [relay] receives 1% of the [round_subsidy] where as the reminaing 99% is split among stakers
 //
 ACTION atmosstakev2::claim(eosio::symbol token_symbol, eosio::name relay, string memo)
 {
-	check(relay != _self, "self cannot relay");
+	eosio::check(relay != _self, "self cannot relay");
 	eosio::check(token_symbol.is_valid(), "invalid token symbol");
 
 	stakes stakes_table(_self, token_symbol.raw());
@@ -241,8 +266,7 @@ ACTION atmosstakev2::claim(eosio::symbol token_symbol, eosio::name relay, string
 	eosio::check(stat != stats_table.end(), "token not found");
 
 	auto time_delta = eosio::time_diff_secs(now, stat->last_claim);
-	if (time_delta < stat->min_claim_secs)
-		eosio::check(false, "it has not been a sufficient amount of time since the last claim() call, remaining secs: " + to_string(stat->min_claim_secs - time_delta));
+	eosio::checkf(time_delta >= stat->min_claim_secs, "it has not been a sufficient amount of time since the last claim() call, remaining secs: %d", (stat->min_claim_secs - time_delta));
 
 	eosio::check(stat->subsidy_supply >= stat->round_subsidy, "insufficient subsidy");
 
@@ -302,7 +326,7 @@ void atmosstakev2::stake(eosio::public_key public_key, eosio::asset balance, eos
 	eosio::check(expires >= (now + stat->min_stake_secs), "the staking period is too short");
 	eosio::check(expires <= (now + stat->max_stake_secs), "the staking period is too long");
 
-	int64_t weight = balance.amount * eosio::time_diff_secs(expires, now);
+	int64_t weight = (balance.amount / 10000) * (eosio::time_diff_secs(expires, now) / 60);
 	eosio::check(weight > 0, "weight must be greater than zero");
 
 	stats_table.modify(stat, same_payer, [&](auto &a) {
@@ -410,7 +434,7 @@ extern "C"
 			//
 			switch (action)
 			{
-				EOSIO_DISPATCH_HELPER(atmosstakev2, (destroy)(create)(exitstake)(claim)(fexitstakes)(sanity))
+				EOSIO_DISPATCH_HELPER(atmosstakev2, (destroy)(create)(sanity)(exitstake)(fexitstakes)(claim)(resetclaim))
 			}
 		}
 		else
