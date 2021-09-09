@@ -19,6 +19,7 @@ public:
         uint64_t key;
         int64_t weight;
         eosio::public_key public_key;
+        eosio::asset initial_balance;
         eosio::asset balance;
         eosio::time_point_sec expires;
 

@@ -338,6 +338,7 @@ void atmosstakev2::stake(eosio::public_key public_key, eosio::asset balance, eos
 		a.key = stakes_table.available_primary_key();
 		a.weight = weight;
 		a.public_key = public_key;
+		a.initial_balance = balance;
 		a.balance = balance;
 		a.expires = expires;
 	});
